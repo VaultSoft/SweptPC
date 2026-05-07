@@ -1,4 +1,4 @@
-SweptPC v1.0.0
+SweptPC v1.0.1
 Free Portable Windows PC Cleaner
 by VaultSoft
 

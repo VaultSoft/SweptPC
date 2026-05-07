@@ -12,6 +12,7 @@ import glob
 import time
 import tempfile
 import subprocess
+import ctypes
 import winreg
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -32,7 +33,7 @@ from PyQt6.QtGui import (
 )
 
 APP_NAME    = "SweptPC"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 BRAND       = "VaultSoft"
 TEAL        = "#00D4AA"
 TEAL_DIM    = "#00A882"
@@ -46,6 +47,12 @@ TEXT_SUB    = "#7D8590"
 TEXT_MUTED  = "#484F58"
 RED_WARN    = "#F85149"
 AMBER       = "#E3B341"
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
 
 def get_folder_size(path):
     total = 0
@@ -504,6 +511,7 @@ class SweptPC(QMainWindow):
         self.cards = {}
         self._scan_worker = None
         self._clean_worker = None
+        self._has_scanned = False
         self._setup_window()
         self._build_ui()
 
@@ -553,6 +561,18 @@ class SweptPC(QMainWindow):
         companion.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; background: transparent;")
         h_layout.addWidget(companion)
         root.addWidget(header)
+
+        if not is_admin():
+            admin_bar = QLabel(
+                "⚠  Not running as Administrator — Prefetch, Update Cache and Memory Dumps "
+                "will be skipped. Right-click SweptPC.exe and choose Run as administrator."
+            )
+            admin_bar.setWordWrap(True)
+            admin_bar.setStyleSheet(
+                "background: #E3B34133; border-bottom: 1px solid #E3B34155; "
+                "color: #E3B341; font-size: 11px; padding: 8px 24px;"
+            )
+            root.addWidget(admin_bar)
 
         body = QWidget()
         body_layout = QVBoxLayout(body)
@@ -679,6 +699,7 @@ class SweptPC(QMainWindow):
 
     def _on_scan_finished(self, results):
         self.scan_results = results
+        self._has_scanned = True
         total = sum(results.values())
         self.stat_found.set_value(format_bytes(total))
         self.progress_label.setText(f"Scan complete — found {format_bytes(total)} across {len(results)} categories")
@@ -688,6 +709,9 @@ class SweptPC(QMainWindow):
         self._update_stats()
 
     def _start_clean(self):
+        if not self._has_scanned:
+            self.progress_label.setText("Run a Scan first to preview what will be cleaned.")
+            return
         if not self.selected_keys:
             return
         self.scan_btn.setEnabled(False)
