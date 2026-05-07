@@ -14,6 +14,9 @@ import tempfile
 import subprocess
 import ctypes
 import winreg
+import json
+import urllib.request
+import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -32,8 +35,9 @@ from PyQt6.QtGui import (
     QIcon, QPen, QBrush, QPalette, QPixmap, QCursor
 )
 
-APP_NAME    = "SweptPC"
-APP_VERSION = "1.0.1"
+APP_NAME         = "SweptPC"
+APP_VERSION      = "1.0.1"
+VERSION_CHECK_URL = "https://raw.githubusercontent.com/VaultSoft/SweptPC/main/version.json"
 BRAND       = "VaultSoft"
 TEAL        = "#00D4AA"
 TEAL_DIM    = "#00A882"
@@ -344,6 +348,61 @@ class CleanWorker(QThread):
                     pass
         return freed
 
+class UpdateChecker(QThread):
+    update_available = pyqtSignal(str)
+
+    def run(self):
+        try:
+            req = urllib.request.Request(
+                VERSION_CHECK_URL,
+                headers={"User-Agent": f"SweptPC/{APP_VERSION}"},
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode())
+            latest = data.get("version", "")
+            if latest and self._is_newer(latest, APP_VERSION):
+                self.update_available.emit(latest)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_newer(remote: str, local: str) -> bool:
+        def parts(v):
+            try:
+                return tuple(int(x) for x in v.split("."))
+            except:
+                return (0,)
+        return parts(remote) > parts(local)
+
+
+class UpdateBanner(QWidget):
+    def __init__(self, version: str, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(38)
+        self.setStyleSheet(
+            f"background: {TEAL}22; border-bottom: 1px solid {TEAL}55;"
+        )
+        row = QHBoxLayout(self)
+        row.setContentsMargins(24, 0, 24, 0)
+        row.setSpacing(8)
+        icon = QLabel("↑")
+        icon.setStyleSheet(f"color: {TEAL}; font-size: 14px; font-weight: 800; background: transparent;")
+        msg = QLabel(f"SweptPC v{version} is available —")
+        msg.setStyleSheet(f"color: {TEXT_MAIN}; font-size: 12px; background: transparent;")
+        link = QPushButton("Click to Download Free")
+        link.setStyleSheet(f"""
+            QPushButton {{ color: {TEAL}; font-size: 12px; font-weight: 700;
+                background: transparent; border: none; text-decoration: underline; padding: 0; }}
+            QPushButton:hover {{ color: #fff; }}
+        """)
+        link.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        link.clicked.connect(lambda: webbrowser.open("https://vaultsoft.gumroad.com/l/sweptpc"))
+        row.addWidget(icon)
+        row.addWidget(msg)
+        row.addWidget(link)
+        row.addStretch()
+
+
 class TealButton(QPushButton):
     def __init__(self, text, parent=None, primary=True):
         super().__init__(text, parent)
@@ -512,8 +571,10 @@ class SweptPC(QMainWindow):
         self._scan_worker = None
         self._clean_worker = None
         self._has_scanned = False
+        self._update_banner = None
         self._setup_window()
         self._build_ui()
+        QTimer.singleShot(3000, self._start_update_check)
 
     def _setup_window(self):
         self.setWindowTitle(f"{APP_NAME}  ·  by {BRAND}")
@@ -536,6 +597,7 @@ class SweptPC(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+        self._root_layout = root
 
         header = QWidget()
         header.setFixedHeight(72)
@@ -561,6 +623,7 @@ class SweptPC(QMainWindow):
         companion.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; background: transparent;")
         h_layout.addWidget(companion)
         root.addWidget(header)
+        self._banner_insert_idx = 1  # after header; bumped to 2 if admin bar added
 
         if not is_admin():
             admin_bar = QLabel(
@@ -573,6 +636,7 @@ class SweptPC(QMainWindow):
                 "color: #E3B341; font-size: 11px; padding: 8px 24px;"
             )
             root.addWidget(admin_bar)
+            self._banner_insert_idx = 2  # admin bar occupies slot 1
 
         body = QWidget()
         body_layout = QVBoxLayout(body)
@@ -644,6 +708,17 @@ class SweptPC(QMainWindow):
         body_layout.addWidget(footer)
         root.addWidget(body, stretch=1)
         self._update_stats()
+
+    def _start_update_check(self):
+        self._updater = UpdateChecker(self)
+        self._updater.update_available.connect(self._show_update_banner)
+        self._updater.start()
+
+    def _show_update_banner(self, version: str):
+        if self._update_banner is not None:
+            return
+        self._update_banner = UpdateBanner(version)
+        self._root_layout.insertWidget(self._banner_insert_idx, self._update_banner)
 
     def _toggle_all(self):
         self._all_selected = not self._all_selected
