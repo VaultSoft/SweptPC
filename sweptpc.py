@@ -819,12 +819,15 @@ def main():
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setOrganizationName(BRAND)
-    for p in [os.path.join(os.path.dirname(__file__), "icon.png"),
-              os.path.join(os.path.dirname(__file__), "icon.ico"),
-              r"C:\Users\Josh\Desktop\Screenshot 2026-04-17 224518.png"]:
-        if os.path.exists(p):
-            app.setWindowIcon(QIcon(p))
-            break
+    if getattr(sys, 'frozen', False):
+        _icon_base = sys._MEIPASS
+    else:
+        _icon_base = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(_icon_base, 'icon.png')
+    if not os.path.exists(icon_path):
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'icon.png')
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window,        QColor(BG_DARK))
     palette.setColor(QPalette.ColorRole.WindowText,    QColor(TEXT_MAIN))
