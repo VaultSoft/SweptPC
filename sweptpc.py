@@ -14,9 +14,6 @@ import tempfile
 import subprocess
 import ctypes
 import winreg
-import json
-import urllib.request
-import webbrowser
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -353,26 +350,22 @@ class UpdateChecker(QThread):
 
     def run(self):
         try:
-            req = urllib.request.Request(
-                VERSION_CHECK_URL,
-                headers={"User-Agent": f"SweptPC/{APP_VERSION}"},
+            result = subprocess.run(
+                ["curl", "-s", "--max-time", "8",
+                 "https://raw.githubusercontent.com/VaultSoft/SweptPC/main/version.json"],
+                capture_output=True, text=True, timeout=12,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read().decode())
-            latest = data.get("version", "")
-            if latest and self._is_newer(latest, APP_VERSION):
-                self.update_available.emit(latest)
+            if result.returncode == 0 and result.stdout.strip():
+                import json
+                latest = json.loads(result.stdout).get("version", "")
+                if latest:
+                    current = tuple(int(x) for x in APP_VERSION.split("."))
+                    remote  = tuple(int(x) for x in latest.split("."))
+                    if remote > current:
+                        self.update_available.emit(latest)
         except Exception:
             pass
-
-    @staticmethod
-    def _is_newer(remote: str, local: str) -> bool:
-        def parts(v):
-            try:
-                return tuple(int(x) for x in v.split("."))
-            except:
-                return (0,)
-        return parts(remote) > parts(local)
 
 
 class UpdateBanner(QWidget):
@@ -380,7 +373,7 @@ class UpdateBanner(QWidget):
         super().__init__(parent)
         self.setFixedHeight(38)
         self.setStyleSheet(
-            f"background: {TEAL}22; border-bottom: 1px solid {TEAL}55;"
+            f"background: #003D30; border-bottom: 2px solid {TEAL}; border-top: 1px solid {TEAL}44;"
         )
         row = QHBoxLayout(self)
         row.setContentsMargins(24, 0, 24, 0)
@@ -396,7 +389,7 @@ class UpdateBanner(QWidget):
             QPushButton:hover {{ color: #fff; }}
         """)
         link.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        link.clicked.connect(lambda: webbrowser.open("https://vaultsoft.gumroad.com/l/sweptpc"))
+        link.clicked.connect(lambda: os.startfile("https://vaultsoft.gumroad.com/l/sweptpc"))
         row.addWidget(icon)
         row.addWidget(msg)
         row.addWidget(link)
@@ -719,6 +712,7 @@ class SweptPC(QMainWindow):
             return
         self._update_banner = UpdateBanner(version)
         self._root_layout.insertWidget(self._banner_insert_idx, self._update_banner)
+        self._update_banner.show()
 
     def _toggle_all(self):
         self._all_selected = not self._all_selected
