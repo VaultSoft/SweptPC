@@ -24,10 +24,13 @@
 ## Screenshot
 
 <p align="center">
-  <img src="docs/logo.png" alt="SweptPC Logo" width="160" />
+  
+<img width="2560" height="1392" alt="SweptPC" src="https://github.com/user-attachments/assets/4af4e413-67dc-40de-93bb-2c130bb5a2e9" />
+<img width="2560" height="1392" alt="SweptPC_Scan" src="https://github.com/user-attachments/assets/cc0d4283-7be0-407c-b5c9-e86a720294ea" />
+<img width="2560" height="1392" alt="SweptPC_Cleaned" src="https://github.com/user-attachments/assets/e3263626-582f-4574-bb0b-87e1bfb6605f" />
 </p>
 
-> Visit **[vaultsoft.github.io/SweptPC](https://vaultsoft.github.io/SweptPC)** to see SweptPC in action.
+> Visit **[vaultsoft.github.io/SweptPC](https://vaultsoft.github.io/SweptPC)**.
 
 ---
 
