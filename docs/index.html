@@ -13,6 +13,86 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "SweptPC",
+    "description": "Free, portable PC cleaner for Windows. Scan and remove junk files, browser cache, temp files and more in one click. No installation required.",
+    "operatingSystem": "Windows 10, Windows 11",
+    "applicationCategory": "UtilitiesApplication",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "url": "https://vaultsoft.github.io/SweptPC/",
+    "downloadUrl": "https://vaultsoft.gumroad.com/l/sweptpc",
+    "softwareVersion": "1.0.1",
+    "author": {
+      "@type": "Organization",
+      "name": "VaultSoft",
+      "url": "https://vaultsoft.github.io/"
+    }
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Is SweptPC free?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes, completely free. SweptPC is free to download and use forever — no trial, no premium version, no subscription."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is SweptPC safe?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. SweptPC only removes files from known safe locations (temp folders, browser cache, recycle bin, app cache). It always shows you exactly what will be deleted before anything happens. The full source code is on GitHub for anyone to review."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What does SweptPC clean?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "SweptPC cleans Windows temp files (%TEMP%, %TMP%, C:\\Windows\\Temp), Chrome, Edge and Firefox browser cache, the Recycle Bin, Teams and Discord app cache, and old CBS and setup logs. It scans first and shows sizes before cleaning anything."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does SweptPC need admin rights?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Not for most categories. SweptPC cleans the majority of junk files without any admin rights. Running as Administrator unlocks all 12 cleaning categories, including system-level temp files."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does SweptPC work on Windows 11?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. SweptPC runs on both Windows 10 and Windows 11 (64-bit) and is tested on both."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What's the difference between SweptPC and CCleaner?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "SweptPC is fully free, portable, and has no installer — just download and run. CCleaner has a paid version, requires installation, and has historically bundled unwanted software. SweptPC is also fully open source, so you can see exactly what it does."
+        }
+      }
+    ]
+  }
+  </script>
+
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -390,6 +470,24 @@
     .footer-links a:hover { color: var(--text); }
     .footer-copy { font-size: 0.73rem; color: var(--dim); }
 
+    /* ─── FAQ ─── */
+    #faq { background: linear-gradient(180deg, #060916 0%, var(--bg) 100%); }
+
+    .faq-list {
+      display: flex; flex-direction: column;
+      max-width: 780px; margin: 0 auto;
+    }
+    .faq-item {
+      padding: 24px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .faq-item:last-child { border-bottom: none; }
+    .faq-q {
+      font-size: 1.02rem; font-weight: 700; color: #fff;
+      margin-bottom: 10px; letter-spacing: -0.01em;
+    }
+    .faq-a { font-size: 0.9rem; color: var(--muted); line-height: 1.7; }
+
     /* ─── RESPONSIVE ─── */
     @media (max-width: 940px) {
       .hero-inner { grid-template-columns: 1fr; }
@@ -440,7 +538,7 @@
     <div>
       <div class="badge"><span class="dot" aria-hidden="true"></span>Free for Windows 10 &amp; 11</div>
 
-      <h1>A cleaner PC,<br><em>in one click.</em></h1>
+      <h1>Free PC Cleaner for Windows —<br><em>remove junk, cache &amp; temp files.</em></h1>
 
       <p class="hero-body">
         Scan, select and remove junk files, browser cache, temp files and more.
@@ -523,7 +621,7 @@
     <div class="s-head center">
       <div class="s-label">Features</div>
       <h2 class="s-title">Everything junked, nothing missed</h2>
-      <p class="s-sub">SweptPC targets every common source of wasted disk space so you don't have to hunt for it yourself.</p>
+      <p class="s-sub">SweptPC targets every common source of wasted disk space so you don't have to hunt for it yourself. A clean, focused alternative to CCleaner and BleachBit — without the bloat, the upsells, or the installer.</p>
     </div>
     <div class="feat-grid">
 
@@ -661,6 +759,49 @@
       </a>
     </div>
     <p class="cta-note">Windows 10 / 11 &nbsp;·&nbsp; No install required &nbsp;·&nbsp; v1.0.1</p>
+  </div>
+</section>
+
+<!-- ═══ FAQ ═══ -->
+<section id="faq">
+  <div class="inner">
+    <div class="s-head center">
+      <div class="s-label">FAQ</div>
+      <h2 class="s-title">Common questions</h2>
+    </div>
+    <div class="faq-list">
+
+      <div class="faq-item">
+        <h3 class="faq-q">Is SweptPC free?</h3>
+        <p class="faq-a">Yes, completely. SweptPC is free to download and use forever — no trial, no premium version, no subscription. Support on Ko-fi is welcome but entirely optional.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">Is it safe?</h3>
+        <p class="faq-a">Yes. SweptPC only removes files from known safe locations — temp folders, browser cache, the recycle bin, app cache. It always shows you exactly what will be deleted before anything happens, and the full source code is on GitHub for anyone to inspect.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">What does it actually clean?</h3>
+        <p class="faq-a">Windows temp files (%TEMP%, %TMP%, C:\Windows\Temp), Chrome, Edge and Firefox browser cache, the Recycle Bin across all drives, Teams and Discord app cache, and old CBS and setup logs. It scans first and shows you sizes before touching anything.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">Does it need admin rights?</h3>
+        <p class="faq-a">Not for most things. SweptPC cleans the majority of junk without any admin rights at all. Running as Administrator unlocks all 12 cleaning categories, including system-level temp files that standard users can't touch.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">Does it work on Windows 11?</h3>
+        <p class="faq-a">Yes. SweptPC runs on both Windows 10 and Windows 11 (64-bit) and is tested on both.</p>
+      </div>
+
+      <div class="faq-item">
+        <h3 class="faq-q">How is it different from CCleaner?</h3>
+        <p class="faq-a">SweptPC is fully free, portable, and has no installer — just download and run. CCleaner has a paid tier, requires installation, and has a history of bundling unwanted software. SweptPC is also fully open source, so there are no surprises about what it does.</p>
+      </div>
+
+    </div>
   </div>
 </section>
 
