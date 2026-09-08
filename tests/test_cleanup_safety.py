@@ -1,0 +1,193 @@
+import os
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from cleanup_safety import (
+    CleanupOutcome,
+    DeleteResult,
+    cleanup_paths,
+    delete_validated_path,
+    is_safe_cleanup_path,
+    validate_cleanup_path,
+)
+
+
+class CleanupSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+        self.root = self.base / "approved"
+        self.root.mkdir()
+        self.protected = self.base / "profile"
+        self.protected.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _protected_roots(self):
+        return [self.protected]
+
+    def test_allows_file_under_approved_root(self):
+        target = self.root / "cache.tmp"
+        target.write_bytes(b"abc")
+
+        self.assertTrue(
+            is_safe_cleanup_path(target, [self.root], protected_roots=self._protected_roots())
+        )
+
+    def test_allows_nested_directory_under_approved_root(self):
+        target = self.root / "profile" / "cache2"
+        target.mkdir(parents=True)
+
+        self.assertTrue(
+            is_safe_cleanup_path(target, [self.root], protected_roots=self._protected_roots())
+        )
+
+    def test_blocks_filesystem_root(self):
+        result = validate_cleanup_path(
+            Path(self.base.anchor), [self.root], protected_roots=self._protected_roots()
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("root", result.reason)
+
+    def test_blocks_parent_of_approved_root(self):
+        self.assertFalse(
+            is_safe_cleanup_path(self.base, [self.root], protected_roots=self._protected_roots())
+        )
+
+    def test_blocks_sibling_outside_approved_root(self):
+        sibling = self.base / "sibling"
+        sibling.mkdir()
+
+        self.assertFalse(
+            is_safe_cleanup_path(sibling, [self.root], protected_roots=self._protected_roots())
+        )
+
+    def test_blocks_empty_path(self):
+        result = validate_cleanup_path("", [self.root], protected_roots=self._protected_roots())
+
+        self.assertFalse(result.ok)
+        self.assertIn("empty", result.reason)
+
+    def test_blocks_relative_path(self):
+        result = validate_cleanup_path("cache.tmp", [self.root], protected_roots=self._protected_roots())
+
+        self.assertFalse(result.ok)
+        self.assertIn("relative", result.reason)
+
+    def test_blocks_traversal_attempt(self):
+        target = self.root / ".." / "outside.tmp"
+
+        result = validate_cleanup_path(target, [self.root], protected_roots=self._protected_roots())
+
+        self.assertFalse(result.ok)
+        self.assertIn("traversal", result.reason)
+
+    def test_windows_style_case_variation_when_relevant(self):
+        target = self.root / "CaseCache.tmp"
+        target.write_bytes(b"x")
+        varied = str(target).swapcase()
+
+        self.assertTrue(
+            is_safe_cleanup_path(varied, [self.root], protected_roots=self._protected_roots())
+        )
+
+    def test_blocks_user_profile_equivalent_root(self):
+        result = validate_cleanup_path(
+            self.protected,
+            [self.protected],
+            allow_root=True,
+            protected_roots=self._protected_roots(),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("protected root", result.reason)
+
+    def test_deletes_validated_file_and_reports_bytes(self):
+        target = self.root / "cache.tmp"
+        target.write_bytes(b"abcd")
+
+        result = delete_validated_path(
+            target,
+            approved_roots=[self.root],
+            protected_roots=self._protected_roots(),
+        )
+
+        self.assertTrue(result.deleted)
+        self.assertEqual(4, result.bytes_removed)
+        self.assertFalse(target.exists())
+
+    def test_deletes_validated_nested_directory(self):
+        target = self.root / "nested"
+        target.mkdir()
+        (target / "cache.tmp").write_bytes(b"abcd")
+
+        result = delete_validated_path(
+            target,
+            approved_roots=[self.root],
+            protected_roots=self._protected_roots(),
+        )
+
+        self.assertTrue(result.deleted)
+        self.assertEqual(4, result.bytes_removed)
+        self.assertFalse(target.exists())
+
+    def test_deletion_failure_is_captured(self):
+        target = self.root / "locked"
+        target.mkdir()
+        (target / "cache.tmp").write_bytes(b"abcd")
+
+        with mock.patch.object(shutil, "rmtree", side_effect=PermissionError("locked")):
+            result = delete_validated_path(
+                target,
+                approved_roots=[self.root],
+                category="cache",
+                protected_roots=self._protected_roots(),
+            )
+
+        self.assertFalse(result.deleted)
+        self.assertFalse(result.blocked)
+        self.assertEqual("cache", result.category)
+        self.assertIn("locked", result.error)
+        self.assertTrue(target.exists())
+
+    def test_one_failed_item_does_not_stop_processing_another(self):
+        failed = self.root / "locked.tmp"
+        ok = self.root / "ok.tmp"
+        failed.write_bytes(b"x")
+        ok.write_bytes(b"yy")
+
+        def fake_deleter(path, **kwargs):
+            if Path(path).name == "locked.tmp":
+                return DeleteResult(str(path), category=kwargs.get("category"), error="locked")
+            Path(path).unlink()
+            return DeleteResult(str(path), category=kwargs.get("category"), bytes_removed=2, deleted=True)
+
+        outcome = cleanup_paths(
+            [failed, ok],
+            approved_roots=[self.root],
+            category="cache",
+            protected_roots=self._protected_roots(),
+            deleter=fake_deleter,
+        )
+
+        self.assertEqual(1, outcome.deleted_count)
+        self.assertEqual(2, outcome.bytes_removed)
+        self.assertEqual(1, len(outcome.failed))
+        self.assertTrue(failed.exists())
+        self.assertFalse(ok.exists())
+
+    def test_cleanup_outcome_tracks_safety_blocked_paths(self):
+        outcome = CleanupOutcome()
+        outcome.add(DeleteResult(str(self.base), blocked=True, error="outside approved roots"))
+
+        self.assertEqual(1, len(outcome.blocked))
+        self.assertEqual(0, outcome.deleted_count)
+
+
+if __name__ == "__main__":
+    unittest.main()
