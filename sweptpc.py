@@ -7,21 +7,19 @@ Companion app to PulseMonitor
 
 import sys
 import os
-import shutil
 import glob
 import time
 import tempfile
 import subprocess
 import ctypes
 import winreg
-from pathlib import Path
 from datetime import datetime, timedelta
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QCheckBox, QProgressBar, QScrollArea,
     QFrame, QSizePolicy, QSpacerItem, QGraphicsDropShadowEffect,
-    QSystemTrayIcon, QMenu
+    QSystemTrayIcon, QMenu, QMessageBox
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation,
@@ -31,6 +29,8 @@ from PyQt6.QtGui import (
     QColor, QPainter, QLinearGradient, QFont, QFontDatabase,
     QIcon, QPen, QBrush, QPalette, QPixmap, QCursor
 )
+
+from cleanup_safety import CleanupOutcome, DeleteResult, safe_delete_path
 
 APP_NAME         = "SweptPC"
 APP_VERSION      = "1.0.1"
@@ -76,20 +76,6 @@ def format_bytes(size):
             return f"{size:.1f} {unit}"
         size /= 1024
     return f"{size:.1f} TB"
-
-def safe_delete_path(path):
-    freed = 0
-    try:
-        p = Path(path)
-        if p.is_file() or p.is_symlink():
-            freed = p.stat().st_size
-            p.unlink(missing_ok=True)
-        elif p.is_dir():
-            freed = get_folder_size(str(p))
-            shutil.rmtree(str(p), ignore_errors=True)
-    except (OSError, PermissionError):
-        pass
-    return max(0, freed)
 
 CLEANUP_TARGETS = {
     "windows_temp": {
@@ -266,53 +252,79 @@ class ScanWorker(QThread):
 class CleanWorker(QThread):
     progress     = pyqtSignal(int, str)
     item_cleaned = pyqtSignal(str, int)
-    finished     = pyqtSignal(int)
+    finished     = pyqtSignal(object)
 
     def __init__(self, selected_keys):
         super().__init__()
         self.selected_keys = selected_keys
 
     def run(self):
-        total_freed = 0
+        outcome = CleanupOutcome()
         count = len(self.selected_keys)
         for i, key in enumerate(self.selected_keys):
             cfg = CLEANUP_TARGETS.get(key, {})
             self.progress.emit(int((i / count) * 100), f"Cleaning {cfg.get('label', key)}…")
-            freed = 0
+            category_outcome = CleanupOutcome()
             if cfg.get("special") == "recycle_bin":
-                freed = self._clean_recycle_bin()
+                category_outcome = self._clean_recycle_bin(key)
             elif "subfolders" in cfg:
-                freed = self._clean_subfolders(cfg)
+                category_outcome = self._clean_subfolders(key, cfg)
             elif "pattern" in cfg:
-                freed = self._clean_patterns(cfg)
+                category_outcome = self._clean_patterns(key, cfg)
             else:
                 for path in cfg.get("paths", []):
                     if path and os.path.exists(path):
-                        freed += self._clean_folder_contents(path)
-            total_freed += freed
-            self.item_cleaned.emit(key, freed)
+                        if os.path.isfile(path):
+                            category_outcome.add(safe_delete_path(
+                                path,
+                                approved_roots=[path],
+                                category=key,
+                                allow_root=True,
+                            ))
+                        else:
+                            category_outcome.extend(self._clean_folder_contents(path, key, [path]))
+            outcome.extend(category_outcome)
+            self._log_outcome_details(category_outcome)
+            self.item_cleaned.emit(key, category_outcome.bytes_removed)
         self.progress.emit(100, "Cleaning complete")
-        self.finished.emit(total_freed)
+        self.finished.emit(outcome)
 
-    def _clean_folder_contents(self, folder):
-        freed = 0
+    def _log_outcome_details(self, outcome):
+        for result in outcome.blocked:
+            print(
+                f"SweptPC cleanup safety-blocked [{result.category}]: {result.target}: {result.error}",
+                file=sys.stderr,
+            )
+        for result in outcome.failed:
+            print(
+                f"SweptPC cleanup failed [{result.category}]: {result.target}: {result.error}",
+                file=sys.stderr,
+            )
+
+    def _clean_folder_contents(self, folder, category, approved_roots):
+        outcome = CleanupOutcome()
         try:
             for item in os.listdir(folder):
-                freed += safe_delete_path(os.path.join(folder, item))
-        except (OSError, PermissionError):
-            pass
-        return freed
+                result = safe_delete_path(
+                    os.path.join(folder, item),
+                    approved_roots=approved_roots,
+                    category=category,
+                )
+                outcome.add(result)
+        except (OSError, PermissionError) as exc:
+            outcome.add(DeleteResult(str(folder), category=category, error=f"could not list cleanup folder: {exc}"))
+        return outcome
 
-    def _clean_recycle_bin(self):
-        freed = 0
+    def _clean_recycle_bin(self, category):
+        outcome = CleanupOutcome()
         for drive in "CDEFGHIJKLMNOPQRSTUVWXYZ":
             rb = f"{drive}:\\$Recycle.Bin"
             if os.path.exists(rb):
-                freed += self._clean_folder_contents(rb)
-        return freed
+                outcome.extend(self._clean_folder_contents(rb, category, [rb]))
+        return outcome
 
-    def _clean_subfolders(self, cfg):
-        freed = 0
+    def _clean_subfolders(self, category, cfg):
+        outcome = CleanupOutcome()
         for base in cfg.get("paths", []):
             if not base or not os.path.exists(base):
                 continue
@@ -323,16 +335,17 @@ class CleanWorker(QThread):
                         for sub in cfg.get("subfolders", []):
                             sp = os.path.join(pp, sub)
                             if os.path.exists(sp):
-                                freed += self._clean_folder_contents(sp)
-            except (OSError, PermissionError):
-                pass
-        return freed
+                                outcome.extend(self._clean_folder_contents(sp, category, [sp]))
+            except (OSError, PermissionError) as exc:
+                outcome.add(DeleteResult(str(base), category=category, error=str(exc)))
+        return outcome
 
-    def _clean_patterns(self, cfg):
-        freed = 0
+    def _clean_patterns(self, category, cfg):
+        outcome = CleanupOutcome()
         pat = cfg.get("pattern", "*")
         days = cfg.get("older_than_days")
         cutoff = time.time() - (days * 86400) if days else None
+        approved_roots = [p for p in cfg.get("paths", []) if p]
         for base in cfg.get("paths", []):
             if not base or not os.path.exists(base):
                 continue
@@ -340,10 +353,14 @@ class CleanWorker(QThread):
                 try:
                     if cutoff and os.path.getmtime(fp) > cutoff:
                         continue
-                    freed += safe_delete_path(fp)
-                except (OSError, PermissionError):
-                    pass
-        return freed
+                    outcome.add(safe_delete_path(
+                        fp,
+                        approved_roots=approved_roots,
+                        category=category,
+                    ))
+                except (OSError, PermissionError) as exc:
+                    outcome.add(DeleteResult(str(fp), category=category, error=str(exc)))
+        return outcome
 
 class UpdateChecker(QThread):
     update_available = pyqtSignal(str)
@@ -564,6 +581,7 @@ class SweptPC(QMainWindow):
         self._scan_worker = None
         self._clean_worker = None
         self._has_scanned = False
+        self._scanned_keys = set()
         self._update_banner = None
         self._setup_window()
         self._build_ui()
@@ -726,6 +744,7 @@ class SweptPC(QMainWindow):
                 self.selected_keys.discard(key)
         self.select_all_btn.setText("Deselect All" if self._all_selected else "Select All")
         self._update_stats()
+        self._update_clean_availability(selection_changed=True)
 
     def _on_card_toggled(self, key, checked):
         if checked:
@@ -733,12 +752,23 @@ class SweptPC(QMainWindow):
         else:
             self.selected_keys.discard(key)
         self._update_stats()
+        self._update_clean_availability(selection_changed=True)
 
     def _update_stats(self):
         self.stat_items.set_value(str(len(self.selected_keys)))
         if self.scan_results:
             total = sum(v for k, v in self.scan_results.items() if k in self.selected_keys)
             self.stat_found.set_value(format_bytes(total))
+
+    def _scan_covers_selection(self):
+        return self._has_scanned and bool(self.selected_keys) and self.selected_keys.issubset(self._scanned_keys)
+
+    def _update_clean_availability(self, selection_changed=False):
+        can_clean = self._scan_covers_selection()
+        self.clean_btn.setEnabled(can_clean)
+        if selection_changed and self._has_scanned and self.selected_keys and not can_clean:
+            self.progress_label.setText("Selection changed — run Scan again before cleaning.")
+            self.progress_label.setStyleSheet(f"color: {AMBER}; font-size: 11px; background: transparent;")
 
     def _start_scan(self):
         if not self.selected_keys:
@@ -769,19 +799,26 @@ class SweptPC(QMainWindow):
     def _on_scan_finished(self, results):
         self.scan_results = results
         self._has_scanned = True
+        self._scanned_keys = set(results.keys())
         total = sum(results.values())
         self.stat_found.set_value(format_bytes(total))
         self.progress_label.setText(f"Scan complete — found {format_bytes(total)} across {len(results)} categories")
+        self.progress_label.setStyleSheet(f"color: {TEXT_SUB}; font-size: 11px; background: transparent;")
         self.progress_bar.setVisible(False)
         self.scan_btn.setEnabled(True)
-        self.clean_btn.setEnabled(bool(self.selected_keys))
+        self._update_clean_availability()
         self._update_stats()
 
     def _start_clean(self):
-        if not self._has_scanned:
+        if not self._scan_covers_selection():
             self.progress_label.setText("Run a Scan first to preview what will be cleaned.")
+            self.progress_label.setStyleSheet(f"color: {AMBER}; font-size: 11px; background: transparent;")
             return
         if not self.selected_keys:
+            return
+        if not self._confirm_clean():
+            self.progress_label.setText("Cleanup cancelled — no files were deleted.")
+            self.progress_label.setStyleSheet(f"color: {TEXT_SUB}; font-size: 11px; background: transparent;")
             return
         self.scan_btn.setEnabled(False)
         self.clean_btn.setEnabled(False)
@@ -793,9 +830,35 @@ class SweptPC(QMainWindow):
         self._clean_worker.finished.connect(self._on_clean_finished)
         self._clean_worker.start()
 
+    def _confirm_clean(self):
+        selected = [key for key in CLEANUP_TARGETS.keys() if key in self.selected_keys]
+        labels = [CLEANUP_TARGETS[key].get("label", key) for key in selected]
+        found = sum(self.scan_results.get(key, 0) for key in selected)
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Confirm permanent cleanup")
+        dialog.setText("Permanently delete selected cleanup files?")
+        dialog.setInformativeText(
+            "SweptPC will permanently delete files from the selected cleanup categories. "
+            "This action cannot be undone.\n\n"
+            f"Selected categories:\n- " + "\n- ".join(labels) + "\n\n"
+            f"Space found in latest scan: {format_bytes(found)}"
+        )
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        dialog.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        dialog.setEscapeButton(QMessageBox.StandardButton.Cancel)
+        yes_button = dialog.button(QMessageBox.StandardButton.Yes)
+        if yes_button:
+            yes_button.setText("Permanently Delete")
+        cancel_button = dialog.button(QMessageBox.StandardButton.Cancel)
+        if cancel_button:
+            cancel_button.setText("Cancel")
+        return dialog.exec() == QMessageBox.StandardButton.Yes
+
     def _on_clean_progress(self, pct, msg):
         self.progress_bar.value = pct
         self.progress_label.setText(msg)
+        self.progress_label.setStyleSheet(f"color: {TEXT_SUB}; font-size: 11px; background: transparent;")
 
     def _on_item_cleaned(self, key, freed):
         if key in self.cards:
@@ -803,13 +866,28 @@ class SweptPC(QMainWindow):
         if key in self.scan_results:
             self.scan_results[key] = 0
 
-    def _on_clean_finished(self, total_freed):
-        total_freed = max(0, total_freed)
+    def _on_clean_finished(self, outcome):
+        if not isinstance(outcome, CleanupOutcome):
+            outcome = CleanupOutcome(bytes_removed=max(0, int(outcome or 0)))
+        total_freed = max(0, outcome.bytes_removed)
+        blocked_count = len(outcome.blocked)
+        failed_count = len(outcome.failed)
+        issue_count = blocked_count + failed_count
         self.stat_freed.set_value(format_bytes(total_freed))
         self.stat_cleaned.set_value(datetime.now().strftime("%H:%M"))
-        self.stat_found.set_value("0 B")
-        self.progress_label.setText(f"✓  Freed {format_bytes(total_freed)} — your PC is cleaner!")
-        self.progress_label.setStyleSheet(f"color: {TEAL}; font-size: 11px; background: transparent;")
+        self.scan_results = {}
+        self._has_scanned = False
+        self._scanned_keys = set()
+        self.stat_found.set_value("Scan needed")
+        summary = f"Freed {format_bytes(total_freed)} from {outcome.deleted_count} items."
+        if issue_count:
+            summary += f" {blocked_count} safety-blocked, {failed_count} failed or locked. Run Scan again before another cleanup."
+            color = AMBER
+        else:
+            summary += " Run Scan again before another cleanup."
+            color = TEAL
+        self.progress_label.setText(summary)
+        self.progress_label.setStyleSheet(f"color: {color}; font-size: 11px; background: transparent;")
         self.progress_bar.setVisible(False)
         self.scan_btn.setEnabled(True)
         self.clean_btn.setEnabled(False)

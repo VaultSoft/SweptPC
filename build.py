@@ -31,6 +31,12 @@ def main():
     if not exe.exists():
         print("Build failed"); sys.exit(1)
 
+    # PyInstaller can collect ICU DLLs at _internal root, where they shadow Qt's
+    # DLL search path and make PyQt6 fail before the app starts.
+    internal = root / "dist" / APP_NAME / "_internal"
+    for dll in internal.glob("icu*.dll"):
+        dll.unlink()
+
     zip_path = root / "dist" / f"{APP_NAME}-v{APP_VERSION}-portable.zip"
     dist_dir = root / "dist" / APP_NAME
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
