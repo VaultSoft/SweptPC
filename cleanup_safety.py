@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+ReparseChecker = Callable[[Path], bool]
 
 
 @dataclass(frozen=True)
@@ -51,7 +55,7 @@ def _case_path(path: Path) -> str:
 
 
 def _resolve_path(path: str | os.PathLike[str]) -> Path:
-    return Path(os.path.expandvars(os.path.expanduser(str(path)))).resolve(strict=False)
+    return Path(os.path.normpath(os.path.expandvars(os.path.expanduser(str(path)))))
 
 
 def _is_drive_or_filesystem_root(path: Path) -> bool:
@@ -69,6 +73,71 @@ def _is_same_or_child(path: Path, root: Path) -> bool:
 
 def _is_same_path(left: Path, right: Path) -> bool:
     return _case_path(left) == _case_path(right)
+
+
+def _path_chain(path: Path) -> list[Path]:
+    if not path.anchor:
+        return [path]
+    current = Path(path.anchor)
+    chain = []
+    for part in path.parts[1:]:
+        current = current / part
+        chain.append(current)
+    return chain
+
+
+def _is_reparse_point(path: Path, reparse_checker: ReparseChecker | None = None) -> bool:
+    if reparse_checker is not None:
+        return reparse_checker(path)
+    if path.is_symlink():
+        return True
+    st = os.lstat(path)
+    attrs = getattr(st, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(attrs & reparse_flag)
+
+
+def _ensure_no_reparse_chain(
+    path: Path,
+    *,
+    reparse_checker: ReparseChecker | None = None,
+) -> ValidationResult:
+    for component in _path_chain(path):
+        try:
+            if not component.exists() and not component.is_symlink():
+                return ValidationResult(False, component, f"path component does not exist: {component}")
+            if _is_reparse_point(component, reparse_checker):
+                return ValidationResult(False, component, f"reparse-point path component is not safe: {component}")
+        except (OSError, RuntimeError) as exc:
+            return ValidationResult(False, component, f"could not inspect path component: {component}: {exc}")
+    return ValidationResult(True, path)
+
+
+def _ensure_no_reparse_subtree(
+    path: Path,
+    *,
+    reparse_checker: ReparseChecker | None = None,
+) -> ValidationResult:
+    if not path.is_dir():
+        return ValidationResult(True, path)
+
+    errors: list[OSError] = []
+
+    def onerror(exc):
+        errors.append(exc)
+
+    for dirpath, dirnames, filenames in os.walk(path, topdown=True, followlinks=False, onerror=onerror):
+        current = Path(dirpath)
+        for name in list(dirnames) + filenames:
+            child = current / name
+            try:
+                if _is_reparse_point(child, reparse_checker):
+                    return ValidationResult(False, child, f"reparse-point child is not safe: {child}")
+            except (OSError, RuntimeError) as exc:
+                return ValidationResult(False, child, f"could not inspect child path: {child}: {exc}")
+        if errors:
+            return ValidationResult(False, current, f"could not inspect cleanup subtree: {errors[0]}")
+    return ValidationResult(True, path)
 
 
 def default_protected_roots(
@@ -103,6 +172,7 @@ def validate_cleanup_path(
     *,
     allow_root: bool = False,
     protected_roots: list[str | os.PathLike[str]] | None = None,
+    reparse_checker: ReparseChecker | None = None,
 ) -> ValidationResult:
     if path is None or str(path).strip() == "":
         return ValidationResult(False, reason="empty path")
@@ -115,16 +185,19 @@ def validate_cleanup_path(
     if ".." in raw.parts:
         return ValidationResult(False, reason="parent-directory traversal is not allowed")
 
-    try:
-        resolved = raw.resolve(strict=False)
-    except (OSError, RuntimeError) as exc:
-        return ValidationResult(False, reason=f"path could not be resolved: {exc}")
+    resolved = _resolve_path(raw)
 
     if _is_drive_or_filesystem_root(resolved):
         return ValidationResult(False, resolved, "drive or filesystem root is not a cleanup target")
 
+    chain_check = _ensure_no_reparse_chain(resolved, reparse_checker=reparse_checker)
+    if not chain_check.ok:
+        return chain_check
+
+    protected_paths = []
     for protected in protected_roots or default_protected_roots():
         protected_path = _resolve_path(protected)
+        protected_paths.append(protected_path)
         if _is_same_path(resolved, protected_path):
             return ValidationResult(False, resolved, f"protected root is not a cleanup target: {protected_path}")
 
@@ -138,7 +211,10 @@ def validate_cleanup_path(
             continue
         if _is_drive_or_filesystem_root(root_path):
             continue
-        if any(_is_same_path(root_path, protected) for protected in (protected_roots or default_protected_roots())):
+        if any(_is_same_path(root_path, protected) for protected in protected_paths):
+            continue
+        root_chain_check = _ensure_no_reparse_chain(root_path, reparse_checker=reparse_checker)
+        if not root_chain_check.ok:
             continue
         resolved_roots.append(root_path)
 
@@ -162,12 +238,14 @@ def is_safe_cleanup_path(
     *,
     allow_root: bool = False,
     protected_roots: list[str | os.PathLike[str]] | None = None,
+    reparse_checker: ReparseChecker | None = None,
 ) -> bool:
     return validate_cleanup_path(
         path,
         approved_roots,
         allow_root=allow_root,
         protected_roots=protected_roots,
+        reparse_checker=reparse_checker,
     ).ok
 
 
@@ -200,12 +278,14 @@ def delete_validated_path(
     category: str | None = None,
     allow_root: bool = False,
     protected_roots: list[str | os.PathLike[str]] | None = None,
+    reparse_checker: ReparseChecker | None = None,
 ) -> DeleteResult:
     validation = validate_cleanup_path(
         path,
         approved_roots,
         allow_root=allow_root,
         protected_roots=protected_roots,
+        reparse_checker=reparse_checker,
     )
     target = str(path)
     if not validation.ok:
@@ -218,6 +298,9 @@ def delete_validated_path(
     try:
         if not resolved.exists() and not resolved.is_symlink():
             return DeleteResult(str(resolved), category=category)
+        subtree_check = _ensure_no_reparse_subtree(resolved, reparse_checker=reparse_checker)
+        if not subtree_check.ok:
+            return DeleteResult(str(subtree_check.path or resolved), category=category, blocked=True, error=subtree_check.reason)
         freed = get_path_size(resolved)
         if resolved.is_file() or resolved.is_symlink():
             resolved.unlink()
@@ -237,6 +320,7 @@ def safe_delete_path(
     category: str | None = None,
     allow_root: bool = False,
     protected_roots: list[str | os.PathLike[str]] | None = None,
+    reparse_checker: ReparseChecker | None = None,
 ) -> DeleteResult:
     return delete_validated_path(
         path,
@@ -244,6 +328,7 @@ def safe_delete_path(
         category=category,
         allow_root=allow_root,
         protected_roots=protected_roots,
+        reparse_checker=reparse_checker,
     )
 
 
@@ -254,6 +339,7 @@ def cleanup_paths(
     category: str | None = None,
     allow_root: bool = False,
     protected_roots: list[str | os.PathLike[str]] | None = None,
+    reparse_checker: ReparseChecker | None = None,
     deleter=None,
 ) -> CleanupOutcome:
     outcome = CleanupOutcome()
@@ -265,6 +351,7 @@ def cleanup_paths(
             category=category,
             allow_root=allow_root,
             protected_roots=protected_roots,
+            reparse_checker=reparse_checker,
         )
         outcome.add(result)
     return outcome

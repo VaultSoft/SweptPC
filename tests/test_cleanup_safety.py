@@ -30,6 +30,12 @@ class CleanupSafetyTests(unittest.TestCase):
     def _protected_roots(self):
         return [self.protected]
 
+    def _make_dir_symlink_or_skip(self, target, link):
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"directory symlink unavailable: {exc}")
+
     def test_allows_file_under_approved_root(self):
         target = self.root / "cache.tmp"
         target.write_bytes(b"abc")
@@ -45,6 +51,15 @@ class CleanupSafetyTests(unittest.TestCase):
         self.assertTrue(
             is_safe_cleanup_path(target, [self.root], protected_roots=self._protected_roots())
         )
+
+    def test_allows_normal_real_directory_under_approved_root(self):
+        target = self.root / "real-cache"
+        target.mkdir()
+        (target / "cache.tmp").write_bytes(b"abcd")
+
+        result = validate_cleanup_path(target, [self.root], protected_roots=self._protected_roots())
+
+        self.assertTrue(result.ok)
 
     def test_blocks_filesystem_root(self):
         result = validate_cleanup_path(
@@ -95,6 +110,90 @@ class CleanupSafetyTests(unittest.TestCase):
         self.assertTrue(
             is_safe_cleanup_path(varied, [self.root], protected_roots=self._protected_roots())
         )
+
+    def test_blocks_approved_root_symlink_redirect_to_outside(self):
+        outside = self.base / "outside"
+        outside.mkdir()
+        (outside / "victim.tmp").write_bytes(b"secret")
+        root_link = self.base / "root-link"
+        self._make_dir_symlink_or_skip(outside, root_link)
+
+        result = validate_cleanup_path(
+            root_link / "victim.tmp",
+            [root_link],
+            protected_roots=self._protected_roots(),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("reparse-point", result.reason)
+
+    def test_blocks_injected_approved_root_reparse_redirect(self):
+        redirected_root = self.base / "redirected-root"
+        redirected_root.mkdir()
+        target = redirected_root / "victim.tmp"
+        target.write_bytes(b"secret")
+
+        result = validate_cleanup_path(
+            target,
+            [redirected_root],
+            protected_roots=self._protected_roots(),
+            reparse_checker=lambda path: path == redirected_root,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("reparse-point", result.reason)
+
+    def test_blocks_nested_symlink_redirect_to_outside(self):
+        outside = self.base / "outside-nested"
+        outside.mkdir()
+        (outside / "victim.tmp").write_bytes(b"secret")
+        nested_link = self.root / "nested-link"
+        self._make_dir_symlink_or_skip(outside, nested_link)
+
+        result = validate_cleanup_path(
+            nested_link / "victim.tmp",
+            [self.root],
+            protected_roots=self._protected_roots(),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("reparse-point", result.reason)
+
+    def test_blocks_directory_delete_when_subtree_contains_reparse_child(self):
+        target = self.root / "parent"
+        target.mkdir()
+        (target / "cache.tmp").write_bytes(b"safe")
+        redirect_child = target / "redirect-child"
+        redirect_child.mkdir()
+
+        result = delete_validated_path(
+            target,
+            approved_roots=[self.root],
+            protected_roots=self._protected_roots(),
+            reparse_checker=lambda path: path == redirect_child,
+        )
+
+        self.assertFalse(result.deleted)
+        self.assertTrue(result.blocked)
+        self.assertIn("reparse-point child", result.error)
+        self.assertTrue(target.exists())
+
+    def test_blocks_when_reparse_safety_cannot_be_established(self):
+        target = self.root / "cache.tmp"
+        target.write_bytes(b"abc")
+
+        def unavailable(_path):
+            raise OSError("inspection unavailable")
+
+        result = validate_cleanup_path(
+            target,
+            [self.root],
+            protected_roots=self._protected_roots(),
+            reparse_checker=unavailable,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("could not inspect", result.reason)
 
     def test_blocks_user_profile_equivalent_root(self):
         result = validate_cleanup_path(
@@ -180,6 +279,28 @@ class CleanupSafetyTests(unittest.TestCase):
         self.assertEqual(1, len(outcome.failed))
         self.assertTrue(failed.exists())
         self.assertFalse(ok.exists())
+
+    def test_clean_worker_passes_runtime_category_roots_to_safety_validator(self):
+        import sweptpc
+
+        category_root = self.root / "runtime-category"
+        category_root.mkdir()
+        child = category_root / "cache.bin"
+        child.write_bytes(b"x")
+        cfg = dict(sweptpc.CLEANUP_TARGETS["chrome_cache"])
+        cfg["paths"] = [str(category_root)]
+        calls = []
+
+        def fake_delete(path, **kwargs):
+            calls.append((str(path), kwargs))
+            return DeleteResult(str(path), category=kwargs.get("category"))
+
+        with mock.patch.dict(sweptpc.CLEANUP_TARGETS, {"chrome_cache": cfg}):
+            with mock.patch.object(sweptpc, "safe_delete_path", side_effect=fake_delete):
+                sweptpc.CleanWorker(["chrome_cache"]).run()
+
+        self.assertEqual([(str(child), {"approved_roots": [str(category_root)], "category": "chrome_cache"})], calls)
+        self.assertTrue(child.exists())
 
     def test_cleanup_outcome_tracks_safety_blocked_paths(self):
         outcome = CleanupOutcome()
