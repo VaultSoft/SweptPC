@@ -19,6 +19,8 @@
   </a>
 </p>
 
+> 🆕 **New:** install, update and launch every VaultSoft app from one place — get **[VaultSoft Hub](https://github.com/VaultSoft/vaultsoft-hub/releases/latest)**.
+
 ---
 
 ## Screenshot
@@ -111,7 +113,11 @@ SweptPC is free. If it saved you some time or disk space, a coffee goes a long w
 
 ## Also by VaultSoft
 
+**[VaultSoft Hub](https://github.com/VaultSoft/vaultsoft-hub)** — install, update and launch every VaultSoft app from one window.
+
 **[PulseMonitor](https://vaultsoft.github.io/PulseMonitor)** — Lightweight real-time PC health monitor for Windows. Track CPU, GPU, RAM, network, and disk stats with a clean desktop overlay and always-on-top gaming widget.
+
+**[WaveScout](https://vaultsoft.github.io/WaveScout)** — Free portable Windows WiFi analyser. Scan nearby networks, check signal strength, find the best channel and monitor your connection live.
 
 ---
 
