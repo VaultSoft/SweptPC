@@ -8,6 +8,7 @@ Companion app to PulseMonitor
 import sys
 import os
 import glob
+import fnmatch
 import time
 import tempfile
 import subprocess
@@ -30,7 +31,7 @@ from PyQt6.QtGui import (
     QIcon, QPen, QBrush, QPalette, QPixmap, QCursor
 )
 
-from cleanup_safety import CleanupOutcome, DeleteResult, safe_delete_path
+from cleanup_safety import CleanupOutcome, DeleteResult, safe_delete_path, validate_cleanup_path
 
 APP_NAME         = "SweptPC"
 APP_VERSION      = "1.0.1"
@@ -301,8 +302,22 @@ class CleanWorker(QThread):
                 file=sys.stderr,
             )
 
+    def _validate_cleanup_root(self, folder, category, approved_roots):
+        validation = validate_cleanup_path(
+            folder,
+            approved_roots,
+            allow_root=True,
+        )
+        if validation.ok:
+            return None
+        return DeleteResult(str(folder), category=category, blocked=True, error=validation.reason)
+
     def _clean_folder_contents(self, folder, category, approved_roots):
         outcome = CleanupOutcome()
+        blocked = self._validate_cleanup_root(folder, category, approved_roots)
+        if blocked:
+            outcome.add(blocked)
+            return outcome
         try:
             for item in os.listdir(folder):
                 result = safe_delete_path(
@@ -328,9 +343,17 @@ class CleanWorker(QThread):
         for base in cfg.get("paths", []):
             if not base or not os.path.exists(base):
                 continue
+            blocked = self._validate_cleanup_root(base, category, [base])
+            if blocked:
+                outcome.add(blocked)
+                continue
             try:
                 for profile in os.listdir(base):
                     pp = os.path.join(base, profile)
+                    profile_validation = validate_cleanup_path(pp, [base])
+                    if not profile_validation.ok:
+                        outcome.add(DeleteResult(str(pp), category=category, blocked=True, error=profile_validation.reason))
+                        continue
                     if os.path.isdir(pp):
                         for sub in cfg.get("subfolders", []):
                             sp = os.path.join(pp, sub)
@@ -349,17 +372,34 @@ class CleanWorker(QThread):
         for base in cfg.get("paths", []):
             if not base or not os.path.exists(base):
                 continue
-            for fp in glob.iglob(os.path.join(base, "**", pat), recursive=True):
-                try:
-                    if cutoff and os.path.getmtime(fp) > cutoff:
-                        continue
-                    outcome.add(safe_delete_path(
-                        fp,
-                        approved_roots=approved_roots,
-                        category=category,
-                    ))
-                except (OSError, PermissionError) as exc:
-                    outcome.add(DeleteResult(str(fp), category=category, error=str(exc)))
+            blocked = self._validate_cleanup_root(base, category, approved_roots)
+            if blocked:
+                outcome.add(blocked)
+                continue
+            try:
+                for dirpath, dirnames, filenames in os.walk(base, topdown=True, followlinks=False):
+                    for dirname in list(dirnames):
+                        child_dir = os.path.join(dirpath, dirname)
+                        validation = validate_cleanup_path(child_dir, approved_roots)
+                        if not validation.ok:
+                            outcome.add(DeleteResult(str(child_dir), category=category, blocked=True, error=validation.reason))
+                            dirnames.remove(dirname)
+                    for filename in filenames:
+                        if not fnmatch.fnmatch(filename, pat):
+                            continue
+                        fp = os.path.join(dirpath, filename)
+                        try:
+                            if cutoff and os.path.getmtime(fp) > cutoff:
+                                continue
+                            outcome.add(safe_delete_path(
+                                fp,
+                                approved_roots=approved_roots,
+                                category=category,
+                            ))
+                        except (OSError, PermissionError) as exc:
+                            outcome.add(DeleteResult(str(fp), category=category, error=str(exc)))
+            except (OSError, PermissionError) as exc:
+                outcome.add(DeleteResult(str(base), category=category, error=str(exc)))
         return outcome
 
 class UpdateChecker(QThread):

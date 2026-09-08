@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ReparseChecker = Callable[[Path], bool]
+PROFILE_SENSITIVE_CHILDREN = ("Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos")
 
 
 @dataclass(frozen=True)
@@ -54,12 +55,16 @@ def _case_path(path: Path) -> str:
     return os.path.normcase(os.path.normpath(str(path)))
 
 
-def _resolve_path(path: str | os.PathLike[str]) -> Path:
+def _normalize_logical_path(path: str | os.PathLike[str]) -> Path:
     return Path(os.path.normpath(os.path.expandvars(os.path.expanduser(str(path)))))
 
 
 def _is_drive_or_filesystem_root(path: Path) -> bool:
     return path.parent == path
+
+
+def _is_unc_or_device_path(path: Path) -> bool:
+    return str(path).startswith("\\\\")
 
 
 def _is_same_or_child(path: Path, root: Path) -> bool:
@@ -75,6 +80,10 @@ def _is_same_path(left: Path, right: Path) -> bool:
     return _case_path(left) == _case_path(right)
 
 
+def _is_same_or_inside_any(path: Path, roots: list[Path]) -> bool:
+    return any(_is_same_path(path, root) or _is_same_or_child(path, root) for root in roots)
+
+
 def _path_chain(path: Path) -> list[Path]:
     if not path.anchor:
         return [path]
@@ -87,14 +96,18 @@ def _path_chain(path: Path) -> list[Path]:
 
 
 def _is_reparse_point(path: Path, reparse_checker: ReparseChecker | None = None) -> bool:
-    if reparse_checker is not None:
-        return reparse_checker(path)
     if path.is_symlink():
         return True
+    if reparse_checker is not None:
+        return reparse_checker(path)
     st = os.lstat(path)
-    attrs = getattr(st, "st_file_attributes", 0)
+    attrs = getattr(st, "st_file_attributes", None)
+    if os.name == "nt" and attrs is None:
+        raise OSError("Windows file attributes were not available")
+    attrs = attrs or 0
+    tag = getattr(st, "st_reparse_tag", 0)
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-    return bool(attrs & reparse_flag)
+    return bool((attrs & reparse_flag) or tag)
 
 
 def _ensure_no_reparse_chain(
@@ -160,10 +173,43 @@ def default_protected_roots(
     for root in roots:
         if root:
             try:
-                resolved.append(_resolve_path(root))
+                resolved.append(_normalize_logical_path(root))
             except (OSError, RuntimeError):
                 pass
     return resolved
+
+
+def default_sensitive_descendants(
+    *,
+    protected_roots: list[str | os.PathLike[str]] | None = None,
+    environ: dict[str, str] | None = None,
+) -> list[Path]:
+    env = os.environ if environ is None else environ
+    roots = [_normalize_logical_path(root) for root in protected_roots or [] if root]
+    user_profile = env.get("USERPROFILE")
+    if user_profile:
+        roots.append(_normalize_logical_path(user_profile))
+    windows_root = env.get("SystemRoot") or env.get("WINDIR") or r"C:\Windows"
+    system_wide_sensitive = [
+        env.get("ProgramFiles", r"C:\Program Files"),
+        env.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        env.get("ProgramData", r"C:\ProgramData"),
+    ]
+
+    sensitive: list[Path] = []
+    for root in roots:
+        for child in PROFILE_SENSITIVE_CHILDREN:
+            sensitive.append(root / child)
+        sensitive.append(root / "System32" / "config")
+    sensitive.append(_normalize_logical_path(windows_root) / "System32" / "config")
+    for root in system_wide_sensitive:
+        if root:
+            sensitive.append(_normalize_logical_path(root))
+
+    unique: dict[str, Path] = {}
+    for path in sensitive:
+        unique[_case_path(path)] = path
+    return list(unique.values())
 
 
 def validate_cleanup_path(
@@ -185,51 +231,62 @@ def validate_cleanup_path(
     if ".." in raw.parts:
         return ValidationResult(False, reason="parent-directory traversal is not allowed")
 
-    resolved = _resolve_path(raw)
+    logical_path = _normalize_logical_path(raw)
 
-    if _is_drive_or_filesystem_root(resolved):
-        return ValidationResult(False, resolved, "drive or filesystem root is not a cleanup target")
+    if _is_unc_or_device_path(logical_path):
+        return ValidationResult(False, logical_path, "UNC and device namespace cleanup paths are not supported")
 
-    chain_check = _ensure_no_reparse_chain(resolved, reparse_checker=reparse_checker)
+    if _is_drive_or_filesystem_root(logical_path):
+        return ValidationResult(False, logical_path, "drive or filesystem root is not a cleanup target")
+
+    chain_check = _ensure_no_reparse_chain(logical_path, reparse_checker=reparse_checker)
     if not chain_check.ok:
         return chain_check
 
     protected_paths = []
     for protected in protected_roots or default_protected_roots():
-        protected_path = _resolve_path(protected)
+        protected_path = _normalize_logical_path(protected)
         protected_paths.append(protected_path)
-        if _is_same_path(resolved, protected_path):
-            return ValidationResult(False, resolved, f"protected root is not a cleanup target: {protected_path}")
+        if _is_same_path(logical_path, protected_path):
+            return ValidationResult(False, logical_path, f"protected root is not a cleanup target: {protected_path}")
 
-    resolved_roots: list[Path] = []
+    sensitive_paths = default_sensitive_descendants(protected_roots=protected_paths)
+    if _is_same_or_inside_any(logical_path, sensitive_paths):
+        return ValidationResult(False, logical_path, "sensitive protected descendant is not a cleanup target")
+
+    logical_roots: list[Path] = []
     for root in approved_roots:
         if root is None or str(root).strip() == "":
             continue
         try:
-            root_path = _resolve_path(root)
+            root_path = _normalize_logical_path(root)
         except (OSError, RuntimeError):
+            continue
+        if _is_unc_or_device_path(root_path):
             continue
         if _is_drive_or_filesystem_root(root_path):
             continue
         if any(_is_same_path(root_path, protected) for protected in protected_paths):
             continue
+        if _is_same_or_inside_any(root_path, sensitive_paths):
+            continue
         root_chain_check = _ensure_no_reparse_chain(root_path, reparse_checker=reparse_checker)
         if not root_chain_check.ok:
             continue
-        resolved_roots.append(root_path)
+        logical_roots.append(root_path)
 
-    if not resolved_roots:
-        return ValidationResult(False, resolved, "no approved cleanup root is available")
+    if not logical_roots:
+        return ValidationResult(False, logical_path, "no approved cleanup root is available")
 
-    for root in resolved_roots:
-        if _is_same_path(resolved, root):
+    for root in logical_roots:
+        if _is_same_path(logical_path, root):
             if allow_root:
-                return ValidationResult(True, resolved)
-            return ValidationResult(False, resolved, "refusing to delete cleanup root itself")
-        if _is_same_or_child(resolved, root):
-            return ValidationResult(True, resolved)
+                return ValidationResult(True, logical_path)
+            return ValidationResult(False, logical_path, "refusing to delete cleanup root itself")
+        if _is_same_or_child(logical_path, root):
+            return ValidationResult(True, logical_path)
 
-    return ValidationResult(False, resolved, "path is outside approved cleanup roots")
+    return ValidationResult(False, logical_path, "path is outside approved cleanup roots")
 
 
 def is_safe_cleanup_path(
