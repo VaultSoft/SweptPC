@@ -18,7 +18,7 @@ class ReleasePackagingTests(unittest.TestCase):
     def test_version_json_is_authoritative_app_version(self):
         metadata = json.loads((ROOT / app_metadata.VERSION_FILENAME).read_text(encoding="utf-8"))
 
-        self.assertEqual("1.0.1", metadata["version"])
+        self.assertRegex(metadata["version"], r"^\d+\.\d+\.\d+$")
         self.assertEqual(metadata["version"], app_metadata.APP_VERSION)
         self.assertEqual(metadata["version"], sweptpc.APP_VERSION)
 
