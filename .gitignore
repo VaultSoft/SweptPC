@@ -1,6 +1,11 @@
 __pycache__/
+*.pyc
 *.spec
 build/
 dist/
 .venv/
-*.pyc
+*.zip
+.pytest_cache/
+.coverage
+htmlcov/
+*.log

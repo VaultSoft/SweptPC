@@ -1,6 +1,6 @@
 import os; os.environ.setdefault('PYTHONUTF8', '1')
 """
-SweptPC v1.0.0
+SweptPC
 A free portable Windows PC cleanup tool by VaultSoft
 Companion app to PulseMonitor
 """
@@ -31,10 +31,9 @@ from PyQt6.QtGui import (
     QIcon, QPen, QBrush, QPalette, QPixmap, QCursor
 )
 
+from app_metadata import APP_NAME, APP_VERSION
 from cleanup_safety import CleanupOutcome, DeleteResult, safe_delete_path, validate_cleanup_path
 
-APP_NAME         = "SweptPC"
-APP_VERSION      = "1.0.1"
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/VaultSoft/SweptPC/main/version.json"
 BRAND       = "VaultSoft"
 TEAL        = "#00D4AA"
