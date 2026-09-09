@@ -1,0 +1,55 @@
+name: Build Verification
+
+on:
+  push:
+    branches:
+      - main
+      - "agent/**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -B -m unittest discover -s tests -v
+
+      - name: Verify Python syntax and imports
+        run: |
+          python -B -c "import ast, pathlib; [ast.parse(path.read_text(encoding='utf-8'), filename=str(path)) for path in pathlib.Path('.').rglob('*.py')]; import app_metadata, build, cleanup_safety, sweptpc; print('syntax/import ok')"
+
+      - name: Build portable package
+        run: python build.py
+
+      - name: Verify build outputs
+        shell: pwsh
+        run: |
+          $zipName = python -c "from app_metadata import package_zip_filename; print(package_zip_filename())"
+          if (-not (Test-Path "dist\SweptPC\SweptPC.exe")) {
+            throw "Missing dist\SweptPC\SweptPC.exe"
+          }
+          if (-not (Test-Path "dist\$zipName")) {
+            throw "Missing dist\$zipName"
+          }
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SweptPC-portable
+          path: dist/
