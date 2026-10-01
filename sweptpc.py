@@ -7,7 +7,6 @@ Companion app to PulseMonitor
 
 import sys
 import os
-import glob
 import fnmatch
 import time
 import tempfile
@@ -32,7 +31,9 @@ from PyQt6.QtGui import (
 )
 
 from app_metadata import APP_NAME, APP_VERSION
-from cleanup_safety import CleanupOutcome, DeleteResult, safe_delete_path, validate_cleanup_path
+from cleanup_safety import (
+    CleanupOutcome, DeleteResult, get_scan_size, iter_scan_files, safe_delete_path, validate_cleanup_path,
+)
 
 VERSION_CHECK_URL = "https://raw.githubusercontent.com/VaultSoft/SweptPC/main/version.json"
 BRAND       = "VaultSoft"
@@ -56,19 +57,8 @@ def is_admin():
         return False
 
 def get_folder_size(path):
-    total = 0
-    try:
-        for dirpath, _, filenames in os.walk(path):
-            for f in filenames:
-                try:
-                    fp = os.path.join(dirpath, f)
-                    if not os.path.islink(fp):
-                        total += os.path.getsize(fp)
-                except (OSError, PermissionError):
-                    pass
-    except (OSError, PermissionError):
-        pass
-    return total
+    # Never follows or counts junctions/symlinks, so the scan only reports what cleanup can reach.
+    return get_scan_size(path)
 
 def format_bytes(size):
     for unit in ["B", "KB", "MB", "GB"]:
@@ -108,6 +98,7 @@ CLEANUP_TARGETS = {
         "desc": "All drives",
         "icon": "[BIN]",
         "special": "recycle_bin",
+        "default_selected": False,  # emptying the bin is opt-in
     },
     "chrome_cache": {
         "label": "Google Chrome Cache",
@@ -240,13 +231,12 @@ class ScanWorker(QThread):
         for base in cfg.get("paths", []):
             if not base or not os.path.exists(base):
                 continue
-            for fp in glob.iglob(os.path.join(base, "**", pat), recursive=True):
-                try:
-                    if cutoff and os.path.getmtime(fp) > cutoff:
-                        continue
-                    total += os.path.getsize(fp)
-                except (OSError, PermissionError):
-                    pass
+            for fp, st in iter_scan_files(base):
+                if not fnmatch.fnmatch(os.path.basename(fp), pat):
+                    continue
+                if cutoff and st.st_mtime > cutoff:
+                    continue
+                total += st.st_size
         return total
 
 class CleanWorker(QThread):
@@ -538,7 +528,7 @@ class CleanupCard(QFrame):
         layout.addWidget(self.size_lbl)
 
         self.checkbox = QCheckBox()
-        self.checkbox.setChecked(True)
+        self.checkbox.setChecked(cfg.get("default_selected", True))
         self.checkbox.setStyleSheet(f"""
             QCheckBox::indicator {{ width: 20px; height: 20px; border-radius: 6px; border: 2px solid {BORDER}; background: {BG_DARK}; }}
             QCheckBox::indicator:hover {{ border-color: {TEAL}; }}
@@ -614,7 +604,7 @@ class StatBadge(QFrame):
 class SweptPC(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.selected_keys = set(CLEANUP_TARGETS.keys())
+        self.selected_keys = {key for key, cfg in CLEANUP_TARGETS.items() if cfg.get("default_selected", True)}
         self.scan_results = {}
         self.cards = {}
         self._scan_worker = None
@@ -752,7 +742,7 @@ class SweptPC(QMainWindow):
         btn_row.addWidget(self.clean_btn)
         body_layout.addLayout(btn_row)
 
-        footer = QLabel(f"{APP_NAME} {APP_VERSION}  ·  by {BRAND}  ·  Free &amp; Portable")
+        footer = QLabel(f"{APP_NAME} {APP_VERSION}  ·  by {BRAND}  ·  Free & Portable")
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         footer.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px; background: transparent;")
         body_layout.addWidget(footer)

@@ -11,6 +11,8 @@ from cleanup_safety import (
     DeleteResult,
     cleanup_paths,
     delete_validated_path,
+    get_scan_size,
+    is_reparse_point,
     is_safe_cleanup_path,
     validate_cleanup_path,
 )
@@ -469,6 +471,55 @@ class CleanupSafetyTests(unittest.TestCase):
 
         self.assertEqual([], calls)
         self.assertTrue(victim.exists())
+
+    def test_scan_size_skips_nested_junction_and_counts_plain_files(self):
+        outside = self.base / "scan-outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_bytes(b"k" * 700)
+        (self.root / "junk.tmp").write_bytes(b"j" * 300)
+        (self.root / "sub").mkdir()
+        (self.root / "sub" / "deep.tmp").write_bytes(b"d" * 50)
+        self._make_junction_or_skip(outside, self.root / "link-out")
+
+        self.assertEqual(350, get_scan_size(self.root))
+        self.assertTrue(is_reparse_point(self.root / "link-out"))
+
+    def test_scan_size_of_root_reached_through_junction_is_zero(self):
+        outside = self.base / "scan-outside-root"
+        outside.mkdir()
+        (outside / "keep.txt").write_bytes(b"k" * 700)
+        link = self.base / "scan-root-link"
+        self._make_junction_or_skip(outside, link)
+
+        self.assertEqual(0, get_scan_size(link))
+
+    def test_scan_size_counts_a_file_root(self):
+        dump = self.root / "memory.dmp"
+        dump.write_bytes(b"m" * 123)
+
+        self.assertEqual(123, get_scan_size(dump))
+
+    def test_scan_worker_does_not_follow_junctions(self):
+        import sweptpc
+
+        outside = self.base / "worker-scan-outside"
+        outside.mkdir()
+        (outside / "keep.log").write_bytes(b"k" * 900)
+        logs = self.root / "logs"
+        logs.mkdir()
+        (logs / "a.log").write_bytes(b"a" * 40)
+        (logs / "skip.txt").write_bytes(b"s" * 5)
+        self._make_junction_or_skip(outside, logs / "link-out")
+        temp_cfg = dict(sweptpc.CLEANUP_TARGETS["windows_temp"], paths=[str(logs)])
+        log_cfg = dict(sweptpc.CLEANUP_TARGETS["windows_logs"], paths=[str(logs)], older_than_days=None)
+        results = {}
+
+        with mock.patch.dict(sweptpc.CLEANUP_TARGETS, {"windows_temp": temp_cfg, "windows_logs": log_cfg}):
+            worker = sweptpc.ScanWorker(["windows_temp", "windows_logs"])
+            worker.finished.connect(results.update)
+            worker.run()
+
+        self.assertEqual({"windows_temp": 45, "windows_logs": 40}, results)
 
     def test_cleanup_outcome_tracks_safety_blocked_paths(self):
         outcome = CleanupOutcome()

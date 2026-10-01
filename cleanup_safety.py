@@ -306,6 +306,53 @@ def is_safe_cleanup_path(
     ).ok
 
 
+def is_reparse_point(path: str | os.PathLike[str]) -> bool:
+    """True for symlinks, junctions and other reparse points; fails closed if it can't tell."""
+    try:
+        return _is_reparse_point(Path(path))
+    except (OSError, RuntimeError):
+        return True
+
+
+def iter_scan_files(path: str | os.PathLike[str]):
+    """Yield (file path, os.stat_result) for every file a scan may count under a cleanup root.
+
+    Same reparse-point rule as cleanup: nothing is yielded for a root reached through a
+    reparse point, and junctions, symlinks and other reparse points inside it are neither
+    followed nor counted.
+    """
+    try:
+        logical_path = _normalize_logical_path(path)
+    except (OSError, RuntimeError):
+        return
+    if not _ensure_no_reparse_chain(logical_path).ok:
+        return
+    if logical_path.is_file():
+        try:
+            yield str(logical_path), os.lstat(logical_path)
+        except (OSError, PermissionError):
+            pass
+        return
+    try:
+        for dirpath, dirnames, filenames in os.walk(logical_path, topdown=True, followlinks=False):
+            dirnames[:] = [d for d in dirnames if not is_reparse_point(os.path.join(dirpath, d))]
+            for filename in filenames:
+                fp = os.path.join(dirpath, filename)
+                if is_reparse_point(fp):
+                    continue
+                try:
+                    yield fp, os.lstat(fp)
+                except (OSError, PermissionError):
+                    pass
+    except (OSError, PermissionError):
+        pass
+
+
+def get_scan_size(path: str | os.PathLike[str]) -> int:
+    """Bytes a scan should report for a cleanup root: only what cleanup could reach."""
+    return sum(max(0, st.st_size) for _, st in iter_scan_files(path))
+
+
 def get_path_size(path: str | os.PathLike[str]) -> int:
     p = Path(path)
     if p.is_file() or p.is_symlink():
