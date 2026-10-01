@@ -1,4 +1,4 @@
-SweptPC v1.0.1
+SweptPC v1.0.2
 Free Portable Windows PC Cleaner
 by VaultSoft
 
@@ -33,4 +33,4 @@ NOTES
 - Run as Administrator to unlock all categories
 - Companion app to PulseMonitor
 
-vaultsoft.github.io
+vaultsoft.co.uk

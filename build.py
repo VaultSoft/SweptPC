@@ -147,6 +147,9 @@ def create_portable_zip(root: Path) -> Path:
     dist_dir = root / "dist" / APP_NAME
     if not dist_dir.is_dir():
         raise FileNotFoundError(f"Missing packaged app directory: {dist_dir}")
+    readme = root / "README.txt"
+    if not readme.is_file():
+        raise FileNotFoundError(f"Missing user README: {readme}")
 
     zip_path = root / "dist" / package_zip_filename()
     if zip_path.exists():
@@ -156,6 +159,8 @@ def create_portable_zip(root: Path) -> Path:
         for path in sorted(dist_dir.rglob("*")):
             if path.is_file():
                 zf.write(path, arcname=Path(APP_NAME) / path.relative_to(dist_dir))
+        # Shipped beside the exe, as in v1.0.1.
+        zf.write(readme, arcname=Path(APP_NAME) / "README.txt")
     return zip_path
 
 

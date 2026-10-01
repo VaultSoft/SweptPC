@@ -3,7 +3,7 @@
 > Free portable Windows PC cleaner — remove junk files, browser caches, and system clutter in seconds.
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v1.0.1-4CAF50?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/version-v1.0.2-4CAF50?style=flat-square" alt="Version" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License" />
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4?style=flat-square&logo=windows&logoColor=white" alt="Platform" />
   <img src="https://img.shields.io/github/stars/VaultSoft/SweptPC?style=flat-square&color=yellow" alt="GitHub Stars" />

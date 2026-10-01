@@ -445,7 +445,7 @@ class UpdateBanner(QWidget):
             QPushButton:hover {{ color: #fff; }}
         """)
         link.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        link.clicked.connect(lambda: os.startfile("https://vaultsoft.gumroad.com/l/sweptpc"))
+        link.clicked.connect(lambda: os.startfile("https://github.com/VaultSoft/SweptPC/releases/latest"))
         row.addWidget(icon)
         row.addWidget(msg)
         row.addWidget(link)

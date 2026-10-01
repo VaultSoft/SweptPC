@@ -4,6 +4,7 @@ import re
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 import app_metadata
@@ -70,6 +71,29 @@ class ReleasePackagingTests(unittest.TestCase):
             (internal / "icuuc.dll").write_bytes(b"path-leaked")
             with self.assertRaises(RuntimeError):
                 build.assert_no_root_icu_dlls(internal)
+
+    def test_portable_zip_ships_readme_beside_exe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app_dir = root / "dist" / "SweptPC"
+            app_dir.mkdir(parents=True)
+            (app_dir / "SweptPC.exe").write_bytes(b"exe")
+
+            with self.assertRaises(FileNotFoundError):
+                build.create_portable_zip(root)
+
+            (root / "README.txt").write_text("readme", encoding="utf-8")
+            with zipfile.ZipFile(build.create_portable_zip(root)) as zf:
+                names = zf.namelist()
+
+        self.assertIn("SweptPC/SweptPC.exe", names)
+        self.assertIn("SweptPC/README.txt", names)
+
+    def test_update_banner_opens_github_releases(self):
+        text = (ROOT / "sweptpc.py").read_text(encoding="utf-8")
+
+        self.assertIn("https://github.com/VaultSoft/SweptPC/releases/latest", text)
+        self.assertNotIn("gumroad", text.lower())
 
 
 if __name__ == "__main__":
